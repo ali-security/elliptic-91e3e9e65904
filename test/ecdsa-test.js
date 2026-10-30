@@ -496,4 +496,120 @@ describe('ECDSA', function() {
       assert.equal(sig.recoveryParam, 1);
     });
   });
+
+  describe('strict DER signature parsing', function() {
+    function verifies(ec, msg, sig, key) {
+      try {
+        return ec.verify(msg, sig, key);
+      } catch (e) {
+        return false;
+      }
+    }
+
+    function pad(bytes) {
+      return (bytes[0] & 0x80) ? [ 0 ].concat(bytes) : bytes;
+    }
+
+    function encodeDER(r, s) {
+      var body = [ 0x02, r.length ].concat(r, [ 0x02, s.length ], s);
+      return [ 0x30, body.length ].concat(body);
+    }
+
+    describe('sign bit of r and s', function() {
+      var ec;
+      var key;
+
+      beforeEach(function() {
+        ec = new elliptic.ec('secp256k1');
+        key = ec.keyFromPrivate(
+            '3b0c1f9b4e3a8d2c7f6e5d4c3b2a19087f6e5d4c3b2a1908f7e6d5c4b3a29180',
+            'hex');
+      });
+
+      function findSignature(predicate) {
+        for (var i = 0; i < 256; i++) {
+          var m = [ i, 0xde, 0xad, 0xbe, 0xef ];
+          var sig = ec.sign(m, key);
+          var r = sig.r.toArray();
+          var s = sig.s.toArray();
+          if (predicate(r, s))
+            return { msg: m, sig: sig, r: r, s: s };
+        }
+        throw new Error('No matching signature found');
+      }
+
+      it('should reject unpadded r with the sign bit set', function() {
+        var found = findSignature(function(r) {
+          return (r[0] & 0x80) !== 0;
+        });
+
+        var good = encodeDER(pad(found.r), pad(found.s));
+        assert.deepEqual(good, found.sig.toDER());
+        assert(verifies(ec, found.msg, good, key), 'padded DER verify');
+
+        var bad = encodeDER(found.r, pad(found.s));
+        assert.throws(function() {
+          new Signature(bad);
+        }, /Signature without r or s/);
+        assert(!verifies(ec, found.msg, bad, key), 'negative r verify');
+      });
+
+      it('should reject unpadded s with the sign bit set', function() {
+        var found = findSignature(function(r, s) {
+          return (s[0] & 0x80) !== 0;
+        });
+
+        var good = encodeDER(pad(found.r), pad(found.s));
+        assert.deepEqual(good, found.sig.toDER());
+        assert(verifies(ec, found.msg, good, key), 'padded DER verify');
+
+        var bad = encodeDER(pad(found.r), found.s);
+        assert.throws(function() {
+          new Signature(bad);
+        }, /Signature without r or s/);
+        assert(!verifies(ec, found.msg, bad, key), 'negative s verify');
+      });
+    });
+
+    describe('length encoding', function() {
+      it('should reject sequence length with leading zero octet', function() {
+        var ec = new elliptic.ec('p521');
+        var key = ec.keyFromPrivate(
+            'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90',
+            'hex');
+        var sig = ec.sign(msg, key);
+        var der = sig.toDER();
+
+        // p521 signatures need the long form for the sequence length
+        assert.equal(der[1], 0x81);
+        assert(verifies(ec, msg, der, key), 'minimal DER verify');
+
+        // Same signature with a redundant leading zero length octet (BER)
+        var bad = [ 0x30, 0x82, 0x00 ].concat(der.slice(2));
+        assert.throws(function() {
+          new Signature(bad);
+        }, /Signature without r or s/);
+        assert(!verifies(ec, msg, bad, key), 'BER length verify');
+      });
+
+      it('should reject integer length with leading zero octet', function() {
+        var r = [];
+        for (var i = 0; i < 0x80; i++)
+          r.push(0x01);
+
+        function build(rlen) {
+          var body = [ 0x02 ].concat(rlen, r, [ 0x02, 0x01, 0x01 ]);
+          return [ 0x30, 0x81, body.length ].concat(body);
+        }
+
+        var sig = new Signature(build([ 0x81, 0x80 ]));
+        assert.equal(sig.r.byteLength(), 0x80);
+        assert.equal(sig.s.toString(16), '1');
+
+        assert.throws(function() {
+          new Signature(build([ 0x82, 0x00, 0x80 ]));
+        }, /Signature without r or s/);
+      });
+    });
+  });
 });

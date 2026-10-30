@@ -110,6 +110,55 @@ describe('EDDSA(\'ed25519\')', function() {
     assert(key.verify(msg, sig));
   });
 
+  describe('signature size', function() {
+    var key;
+
+    before(function() {
+      key = ed25519.keyFromSecret(toArray(new Array(65).join('0'), 'hex'));
+    });
+
+    function verifies(msg, sig) {
+      try {
+        return key.verify(msg, sig);
+      } catch (e) {
+        return false;
+      }
+    }
+
+    it('rejects signatures with appended zero bytes', function() {
+      var msg = [ 0xB, 0xE, 0xE, 0xF ];
+      var sig = key.sign(msg).toBytes();
+      assert.equal(sig.length, 64);
+      assert(verifies(msg, sig));
+
+      var appended = sig.concat([ 0x00 ]);
+      assert.throws(function() {
+        ed25519.makeSignature(appended);
+      }, /Signature has invalid size/);
+      assert(!verifies(msg, appended), 'appended zero byte verify');
+      assert(!verifies(msg, toHex(sig) + '00'), 'appended zero hex verify');
+    });
+
+    it('rejects signatures with stripped zero bytes', function() {
+      var msg;
+      var sig;
+      for (var i = 0; i < 1024; i++) {
+        msg = [ i & 0xff, i >>> 8, 0xB, 0xE, 0xE, 0xF ];
+        sig = key.sign(msg).toBytes();
+        if (sig[sig.length - 1] === 0x00)
+          break;
+      }
+      assert.equal(sig[sig.length - 1], 0x00);
+      assert(verifies(msg, sig));
+
+      var stripped = sig.slice(0, sig.length - 1);
+      assert.throws(function() {
+        ed25519.makeSignature(stripped);
+      }, /Signature has invalid size/);
+      assert(!verifies(msg, stripped), 'stripped zero byte verify');
+    });
+  });
+
   describe('KeyPair', function() {
     var pair;
     var secret = '00000000000000000000000000000000' +
