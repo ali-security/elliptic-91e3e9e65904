@@ -1,0 +1,21 @@
+name: seal-pack
+
+on:
+  workflow_dispatch:
+
+jobs:
+  pack:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "12"
+      - name: Pack
+        run: npm pack --ignore-scripts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: elliptic-tgz
+          path: elliptic-6.5.2.tgz
+          if-no-files-found: error
