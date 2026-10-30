@@ -485,6 +485,48 @@ describe('ECDSA', function() {
     });
   });
 
+  it('Wycheproof special hash case with hex', function() {
+    var curve = new elliptic.ec('p192');
+    var msg =
+      '00000000690ed426ccf17803ebe2bd0884bcd58a1bb5e7477ead3645f356e7a9';
+    var sig = '303502186f20676c0d04fc40ea55d5702f798355787363a9' +
+              '1e97a7e50219009d1c8c171b2b02e7d791c204c17cea4cf5' +
+              '56a2034288885b';
+    var pub = '04cd35a0b18eeb8fcd87ff019780012828745f046e785deb' +
+              'a28150de1be6cb4376523006beff30ff09b4049125ced29723';
+    var pubKey = curve.keyFromPublic(pub, 'hex');
+    assert(pubKey.verify(msg, sig) === true);
+  });
+  it('Wycheproof special hash case with Array', function() {
+    var curve = new elliptic.ec('p192');
+    var msg = [
+      0x00, 0x00, 0x00, 0x00, 0x69, 0x0e, 0xd4, 0x26, 0xcc, 0xf1, 0x78,
+      0x03, 0xeb, 0xe2, 0xbd, 0x08, 0x84, 0xbc, 0xd5, 0x8a, 0x1b, 0xb5,
+      0xe7, 0x47, 0x7e, 0xad, 0x36, 0x45, 0xf3, 0x56, 0xe7, 0xa9,
+    ];
+    var sig = '303502186f20676c0d04fc40ea55d5702f798355787363a9' +
+              '1e97a7e50219009d1c8c171b2b02e7d791c204c17cea4cf5' +
+              '56a2034288885b';
+    var pub = '04cd35a0b18eeb8fcd87ff019780012828745f046e785deb' +
+              'a28150de1be6cb4376523006beff30ff09b4049125ced29723';
+    var pubKey = curve.keyFromPublic(pub, 'hex');
+    assert(pubKey.verify(msg, sig) === true);
+  });
+  it('Wycheproof special hash case with BN', function() {
+    var curve = new elliptic.ec('p192');
+    var msg = new BN(
+      '00000000690ed426ccf17803ebe2bd0884bcd58a1bb5e7477ead3645f356e7a9',
+      16
+    );
+    var sig = '303502186f20676c0d04fc40ea55d5702f798355787363a9' +
+              '1e97a7e50219009d1c8c171b2b02e7d791c204c17cea4cf5' +
+              '56a2034288885b';
+    var pub = '04cd35a0b18eeb8fcd87ff019780012828745f046e785deb' +
+              'a28150de1be6cb4376523006beff30ff09b4049125ced29723';
+    var pubKey = curve.keyFromPublic(pub, 'hex');
+    assert(pubKey.verify(msg, sig, { msgBitLength: 32 * 8 }) === true);
+  });
+
   describe('Signature', function () {
     it('recoveryParam is 0', function () {
       var sig = new Signature({ r: '00', s: '00', recoveryParam: 0 });
@@ -610,6 +652,114 @@ describe('ECDSA', function() {
           new Signature(build([ 0x82, 0x00, 0x80 ]));
         }, /Signature without r or s/);
       });
+    });
+  });
+
+  describe('CVE-2025-14505 nonce leading-zero bias', function() {
+    it('P-521 signature must match Python cryptography reference vector',
+       function() {
+      var crypto = require('crypto');
+      var ec = new elliptic.ec('p521');
+      var key = ec.keyFromPrivate(
+        '01535d22d63de9195efd4c41358ddc89c68b6cc202b558fbf48a09e95d' +
+        'ddf953afc1b4cfed6df0f3330f986735085e367fd07030c3ab49dcd346' +
+        '1197b00f09a064fb',
+        'hex'
+      );
+      var msg = Buffer.from('12f830e9591916ec', 'hex');
+      var msgHash = crypto.createHash('sha512').update(msg).digest();
+      var sig = key.sign(msgHash);
+      assert.equal(
+        sig.r.toString(16),
+        '1e92eeaf15414d4af3ee933825131867b6cb10234f28336ac976a9912713' +
+        '9f23100458a9ee7184bfa64540ba385331eb3b469f491b3da013c42ad154' +
+        'a5907f554f0'
+      );
+      assert.equal(
+        sig.s.toString(16),
+        'db3703c6d51b8a85c10c21b7643fe751781a7ad5708e3a944107f6da086a' +
+        'fdc8532765871a9cabc81cec0f5b28ee59f0c72b48b72a39ae2d230dfb03' +
+        'afb9968a94'
+      );
+    });
+
+    it('unpatched P-521 nonce produces wrong signature (regression guard)',
+       function() {
+      var crypto = require('crypto');
+      var ec = new elliptic.ec('p521');
+      var key = ec.keyFromPrivate(
+        '01535d22d63de9195efd4c41358ddc89c68b6cc202b558fbf48a09e95d' +
+        'ddf953afc1b4cfed6df0f3330f986735085e367fd07030c3ab49dcd346' +
+        '1197b00f09a064fb',
+        'hex'
+      );
+      var msg = Buffer.from('12f830e9591916ec', 'hex');
+      var msgHash = crypto.createHash('sha512').update(msg).digest();
+      var sig = key.sign(msgHash);
+      assert.notEqual(
+        sig.r.toString(16),
+        '5efa2e9fb7d988bf19e750bc6235364ecfdbe649f1a3b9a89af077eefd7f' +
+        '8dd979f371b28d77b885cf369a100c0d326804fc4b9ab681a39d212b41a8' +
+        '5b126b0013'
+      );
+    });
+  });
+
+  describe('Leading zero k value handling (upstream PR #345)', function() {
+    it('should correctly sign when k has leading zeros', function() {
+      var ec = new elliptic.ec('secp256k1');
+      var key = ec.genKeyPair({ entropy: entropy });
+
+      var leadingZeroK = new Array(32);
+      leadingZeroK[0] = 0x00;
+      leadingZeroK[1] = 0x00;
+      for (var i = 2; i < 32; i++) {
+        leadingZeroK[i] = 0x42 + i;
+      }
+
+      var sign = key.sign('test message', {
+        k: function(iter) {
+          if (iter === 0) return new BN(leadingZeroK);
+          return new BN(1358);
+        }
+      });
+
+      assert(ec.verify('test message', sign, key));
+    });
+
+    it('should produce deterministic signatures with potential leading zero k',
+       function() {
+      var ec = new elliptic.ec('secp256k1');
+      var key = ec.keyFromPrivate(
+        'c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721'
+      );
+
+      var sign1 = key.sign('sample');
+      var sign2 = key.sign('sample');
+
+      assert.equal(sign1.r.toString(16), sign2.r.toString(16));
+      assert.equal(sign1.s.toString(16), sign2.s.toString(16));
+    });
+  });
+
+  describe('GHSA-vjh7-7g9h-fjfh message validation', function() {
+    it('should reject non-byte array-like messages', function() {
+      var ec = new elliptic.ec('secp256k1');
+      var key = ec.genKeyPair({ entropy: entropy });
+      assert.throws(function() {
+        key.sign([ 1, 2, 256 ]);
+      });
+      assert.throws(function() {
+        key.sign({ length: -1 });
+      });
+    });
+
+    it('should reject negative messages', function() {
+      var ec = new elliptic.ec('secp256k1');
+      var key = ec.genKeyPair({ entropy: entropy });
+      assert.throws(function() {
+        key.sign(new BN(-1));
+      }, /Can not sign a negative message/);
     });
   });
 });
